@@ -100,13 +100,15 @@ def set_korean_font():
     elif "windows" in sysname:
         candidates = ["Malgun Gothic"]
     else:
-        candidates = ["NanumGothic", "Noto Sans CJK KR", "Noto Sans KR", "UnDotum"]
+        # Streamlit Cloud(리눅스)용: packages.txt로 설치되는 폰트들
+        candidates = ["NanumGothic", "Noto Sans CJK KR", "Noto Sans KR"]
 
     available = {f.name for f in fm.fontManager.ttflist}
     for c in candidates:
         if c in available:
             mpl.rcParams["font.family"] = c
             break
+
     mpl.rcParams["axes.unicode_minus"] = False
 
 

@@ -1,6 +1,7 @@
 # app_streamlit.py
 from __future__ import annotations
 
+import os
 import re
 import platform
 from pathlib import Path
@@ -94,13 +95,34 @@ def normalize_gu(s: str) -> str:
 # 2) 한글 폰트
 # =========================
 def set_korean_font():
+    """
+    Streamlit Cloud(리눅스)에서도 안 깨지게:
+    1) repo에 포함한 fonts/ 폰트를 우선 등록해서 사용
+    2) 없으면 OS별 기본 후보로 fallback
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # ✅ repo에 넣은 폰트 파일(가장 확실)
+    font_candidates = [
+        os.path.join(base_dir, "fonts", "NotoSansKR-Regular.otf"),
+        os.path.join(base_dir, "fonts", "NanumGothic.ttf"),
+    ]
+
+    for fp in font_candidates:
+        if os.path.exists(fp):
+            fm.fontManager.addfont(fp)
+            font_name = fm.FontProperties(fname=fp).get_name()
+            mpl.rcParams["font.family"] = font_name
+            mpl.rcParams["axes.unicode_minus"] = False
+            return
+
+    # (fallback) OS별 폰트 후보
     sysname = platform.system().lower()
     if "darwin" in sysname:
         candidates = ["AppleGothic", "Apple SD Gothic Neo"]
     elif "windows" in sysname:
         candidates = ["Malgun Gothic"]
     else:
-        # Streamlit Cloud(리눅스)용: packages.txt로 설치되는 폰트들
         candidates = ["NanumGothic", "Noto Sans CJK KR", "Noto Sans KR"]
 
     available = {f.name for f in fm.fontManager.ttflist}

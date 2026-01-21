@@ -96,34 +96,29 @@ def normalize_gu(s: str) -> str:
 # =========================
 def set_korean_font():
     """
-    Streamlit Cloud(리눅스)에서도 안 깨지게:
-    1) repo에 포함한 fonts/ 폰트를 우선 등록해서 사용
-    2) 없으면 OS별 기본 후보로 fallback
+    Streamlit Cloud(리눅스)에서도 한글 안 깨지게:
+    - repo에 포함한 fonts/NotoSansKR-Regular.ttf 를 최우선으로 등록/사용
+    - 없으면 OS별 기본 폰트 후보로 fallback
     """
     base_dir = os.path.dirname(os.path.abspath(__file__))
+    font_path = os.path.join(base_dir, "fonts", "NotoSansKR-Regular.ttf")
 
-    # ✅ repo에 넣은 폰트 파일(가장 확실)
-    font_candidates = [
-        os.path.join(base_dir, "fonts", "NotoSansKR-Regular.otf"),
-        os.path.join(base_dir, "fonts", "NanumGothic.ttf"),
-    ]
+    # ✅ 1) 폰트 파일이 있으면 무조건 이걸 사용 (가장 확실)
+    if os.path.exists(font_path):
+        fm.fontManager.addfont(font_path)
+        font_name = fm.FontProperties(fname=font_path).get_name()
+        mpl.rcParams["font.family"] = font_name
+        mpl.rcParams["axes.unicode_minus"] = False
+        return
 
-    for fp in font_candidates:
-        if os.path.exists(fp):
-            fm.fontManager.addfont(fp)
-            font_name = fm.FontProperties(fname=fp).get_name()
-            mpl.rcParams["font.family"] = font_name
-            mpl.rcParams["axes.unicode_minus"] = False
-            return
-
-    # (fallback) OS별 폰트 후보
+    # ✅ 2) fallback (로컬/다른 환경 대비)
     sysname = platform.system().lower()
     if "darwin" in sysname:
         candidates = ["AppleGothic", "Apple SD Gothic Neo"]
     elif "windows" in sysname:
         candidates = ["Malgun Gothic"]
     else:
-        candidates = ["NanumGothic", "Noto Sans CJK KR", "Noto Sans KR"]
+        candidates = ["Noto Sans CJK KR", "Noto Sans KR", "NanumGothic"]
 
     available = {f.name for f in fm.fontManager.ttflist}
     for c in candidates:

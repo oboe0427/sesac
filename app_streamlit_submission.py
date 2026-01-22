@@ -1,4 +1,4 @@
-# app_streamlit.py
+# app_streamlit_.py
 from __future__ import annotations
 
 import os
@@ -30,8 +30,8 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 # =========================
 ROOT = Path(__file__).resolve().parent
 BASE_CANDIDATES = [
-    ROOT,                      # repo root
-    ROOT / "team_project_1",    # repo 안에 team_project_1/가 있는 구조 대응
+    ROOT,                           # repo root
+    ROOT / "team_project_1",         # repo 안에 team_project_1/가 있는 구조 대응
     ROOT.parent / "team_project_1",  # 상위에 team_project_1/가 있는 구조 대응
 ]
 
@@ -48,7 +48,6 @@ def pick_existing_path(*parts: str, fallback_base: Path = ROOT) -> str:
 # =========================
 # 1) 기본 설정(필요시 수정)
 # =========================
-# ✅ shp 대신 geojson을 기본으로 사용
 DEFAULT_GEO_PATH = pick_existing_path("geodata", "seoul_gu.geojson")
 DEFAULT_CSV_PATH = pick_existing_path("data", "00_merged_final_re.csv")
 DEFAULT_BURDEN_TS_PATH = pick_existing_path("data", "01_combined.csv")
@@ -103,7 +102,6 @@ def set_korean_font():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     font_path = os.path.join(base_dir, "fonts", "NotoSansKR-Regular.ttf")
 
-    # ✅ 1) 폰트 파일이 있으면 무조건 이걸 사용 (가장 확실)
     if os.path.exists(font_path):
         fm.fontManager.addfont(font_path)
         font_name = fm.FontProperties(fname=font_path).get_name()
@@ -111,7 +109,6 @@ def set_korean_font():
         mpl.rcParams["axes.unicode_minus"] = False
         return
 
-    # ✅ 2) fallback (로컬/다른 환경 대비)
     sysname = platform.system().lower()
     if "darwin" in sysname:
         candidates = ["AppleGothic", "Apple SD Gothic Neo"]
@@ -137,11 +134,11 @@ def load_seoul_gu(path: str) -> gpd.GeoDataFrame:
     """
     ✅ geojson/shp 모두 지원.
     - geojson이 이미 구 단위면: '자치구' 또는 'SIG_KOR_NM'에서 구 이름을 만들어 사용
-    - shp(TN_SIGNGU_BNDRY 등)면: ADZONE_NM + LEGLCD_SE 기반 기존 로직 유지
+    - shp(TN_SIGNGU_BNDRY 등)면: ADZONE_NM + LEGLCD_SE 기반 로직
     """
     gdf = gpd.read_file(path)
 
-    # ---- (A) 이미 '자치구' 컬럼이 있는 경우 (가장 이상적)
+    # (A) 이미 '자치구' 컬럼이 있는 경우
     if "자치구" in gdf.columns:
         gdf["자치구"] = gdf["자치구"].apply(normalize_gu)
         seoul_gu = gdf[gdf["자치구"].isin(SEOUL_GU)].copy()
@@ -149,7 +146,7 @@ def load_seoul_gu(path: str) -> gpd.GeoDataFrame:
         seoul_gu = seoul_gu.dissolve(by="자치구", as_index=False)
         return seoul_gu
 
-    # ---- (B) SIG_KOR_NM 같은 컬럼에 "서울특별시 강남구" 형태가 있는 경우
+    # (B) SIG_KOR_NM에 "서울특별시 강남구" 형태
     if "SIG_KOR_NM" in gdf.columns:
         gdf["자치구"] = (
             gdf["SIG_KOR_NM"].astype(str)
@@ -165,7 +162,7 @@ def load_seoul_gu(path: str) -> gpd.GeoDataFrame:
         seoul_gu = seoul_gu.dissolve(by="자치구", as_index=False)
         return seoul_gu
 
-    # ---- (C) shp(TN_SIGNGU_BNDRY) 전용 로직
+    # (C) shp(TN_SIGNGU_BNDRY) 전용
     name_col = "ADZONE_NM"
     leg_col  = "LEGLCD_SE"
     if (name_col in gdf.columns) and (leg_col in gdf.columns):
@@ -495,7 +492,7 @@ def make_burden_timeseries_fig(df: pd.DataFrame) -> tuple[go.Figure, str]:
 
 
 # =========================
-# 7) 다중회귀(OLS + HC3) + Partial Regression Plot
+# 7) 다중회귀(OLS + HC3) + 제출용 시각화(Adjusted + Residual)
 # =========================
 def _clean_for_reg(df: pd.DataFrame, y_col: str, x_cols: list[str]) -> pd.DataFrame:
     if CSV_KEY not in df.columns:
@@ -553,8 +550,10 @@ def compute_vif(work: pd.DataFrame, x_cols: list[str]) -> pd.DataFrame:
 def build_color_mask(gu_series: pd.Series, red_list: list[str], green_list: list[str]) -> np.ndarray:
     gu = gu_series.astype(str)
     colors = np.array(["blue"] * len(gu), dtype=object)
-    red_set = set(red_list)
-    green_set = set(green_list)
+
+    # ✅ 하이라이트 목록도 normalize해서 매칭 안정화
+    red_set = set(normalize_gu(x) for x in red_list)
+    green_set = set(normalize_gu(x) for x in green_list)
 
     is_red = gu.isin(red_set).to_numpy()
     is_green = gu.isin(green_set).to_numpy() & (~is_red)
@@ -619,7 +618,7 @@ def plot_with_labels_partial(
         placed.append(bb)
 
 
-def make_partial_reg_fig(
+def make_adjusted_effect_fig(
     work: pd.DataFrame,
     y_col: str,
     x_focus: str,
@@ -629,22 +628,40 @@ def make_partial_reg_fig(
     figsize=(9, 7),
     label_fontsize=8,
 ) -> tuple[plt.Figure, dict]:
-
+    """
+    Adjusted / Partial-effect plot (x는 원값 그대로)
+    - full model: y ~ x_focus + controls
+    - controls 평균 고정한 조정값 y_adj = y - (C - mu) @ b_c
+    - p-value는 HC3 기준(res.pvalues)
+    """
     if x_focus not in x_cols:
         raise ValueError("x_focus는 선택된 X 목록에 있어야 합니다.")
 
-    others = [c for c in x_cols if c != x_focus]
-
-    if len(others) > 0:
-        Xo = sm.add_constant(work[others].astype(float))
-        y_resid = sm.OLS(work[y_col].astype(float), Xo).fit().resid.to_numpy()
-        x_resid = sm.OLS(work[x_focus].astype(float), Xo).fit().resid.to_numpy()
-    else:
-        y_resid = (work[y_col].astype(float) - np.nanmean(work[y_col].astype(float))).to_numpy()
-        x_resid = (work[x_focus].astype(float) - np.nanmean(work[x_focus].astype(float))).to_numpy()
+    controls = [c for c in x_cols if c != x_focus]
 
     res = fit_ols_hc3(work, y_col, x_cols)
-    b = float(res.params.get(x_focus, np.nan))
+
+    x = work[x_focus].astype(float).to_numpy()
+    y = work[y_col].astype(float).to_numpy()
+
+    b0 = float(res.params.get("const", 0.0))
+    b_x = float(res.params.get(x_focus, np.nan))
+
+    if len(controls) > 0:
+        C = work[controls].astype(float).to_numpy()
+        mu = work[controls].astype(float).mean(axis=0).to_numpy()
+        b_c = res.params[controls].astype(float).to_numpy()
+
+        y_adj = y - (C - mu) @ b_c
+        const_adj = b0 + float(mu @ b_c)
+        ylab = f"{y_col} (controls fixed at mean)"
+        title_controls = controls
+    else:
+        y_adj = y.copy()
+        const_adj = b0
+        ylab = f"{y_col}"
+        title_controls = "None"
+
     p = float(res.pvalues.get(x_focus, np.nan))
     r2 = float(res.rsquared)
     n = int(res.nobs)
@@ -658,26 +675,23 @@ def make_partial_reg_fig(
 
     plot_with_labels_partial(
         ax=ax,
-        x=x_resid,
-        y=y_resid,
+        x=x,
+        y=y_adj,
         labels=labels,
         colors=colors,
         fontsize=label_fontsize,
     )
 
-    xr = np.linspace(np.nanmin(x_resid), np.nanmax(x_resid), 200)
-    yr = b * xr
-    ax.plot(xr, yr, linewidth=2, label=f"Partial slope β={b:.6f}")
+    xs = np.linspace(np.nanmin(x), np.nanmax(x), 200)
+    ys = const_adj + b_x * xs
+    ax.plot(xs, ys, linewidth=2, label=f"Adjusted slope β={b_x:.6f}")
 
-    ax.axhline(0, linewidth=1, alpha=0.4)
-    ax.axvline(0, linewidth=1, alpha=0.4)
     ax.legend(loc="best", frameon=True)
+    ax.set_xlabel(f"{x_focus} (original)")
+    ax.set_ylabel(ylab)
+    ax.set_title(f"Adjusted / Partial-effect (HC3): {y_col} ~ {x_focus} | controls={title_controls}")
 
-    ax.set_xlabel(f"{x_focus} (residualized on other X)")
-    ax.set_ylabel(f"{y_col} (residualized on other X)")
-    ax.set_title(f"Partial Regression (HC3): {y_col} ~ {x_focus} | controls={others if others else 'None'}")
-
-    box_txt = f"β({x_focus}) = {b:.6f}\np = {p:.4g}\nR²(full) = {r2:.3f}\nN = {n}"
+    box_txt = f"β({x_focus}) = {b_x:.6f}\np(HC3) = {p:.4g}\nR²(full) = {r2:.3f}\nN = {n}"
     ax.text(
         0.98, 0.02, box_txt,
         transform=ax.transAxes,
@@ -687,8 +701,69 @@ def make_partial_reg_fig(
         zorder=10
     )
 
-    meta = {"beta": b, "p": p, "r2": r2, "n": n}
+    meta = {"beta": b_x, "p": p, "r2": r2, "n": n, "const_adj": const_adj}
     return fig, meta
+
+
+def make_residuals_vs_fitted_fig(
+    work: pd.DataFrame,
+    res,
+    y_col: str,
+    highlight_red: list[str],
+    highlight_green: list[str],
+    figsize=(9, 5),
+    label_fontsize=8,
+) -> plt.Figure:
+    """
+    Residual plot: residuals vs fitted (전체모형 기준)
+    + ±2σ 밴드(잔차 표준편차) 얇게 추가
+    """
+    fitted = np.asarray(res.fittedvalues, dtype=float)
+    resid  = np.asarray(res.resid, dtype=float)
+
+    # 잔차 표준편차(표본) 기준
+    sigma = float(np.nanstd(resid, ddof=1)) if np.isfinite(resid).sum() >= 2 else np.nan
+    band = 2.0 * sigma if np.isfinite(sigma) else np.nan
+
+    fig, ax = plt.subplots(figsize=figsize)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    labels = work[CSV_KEY].astype(str).to_numpy()
+    colors = build_color_mask(work[CSV_KEY], highlight_red, highlight_green)
+
+    plot_with_labels_partial(
+        ax=ax,
+        x=fitted,
+        y=resid,
+        labels=labels,
+        colors=colors,
+        fontsize=label_fontsize,
+        point_size=20,
+        point_alpha=0.85,
+    )
+
+    # 0선 + ±2σ 밴드
+    ax.axhline(0.0, linewidth=1, alpha=0.7)
+
+    if np.isfinite(band):
+        ax.axhline(+band, linewidth=1, linestyle="--", alpha=0.55, color="gray")
+        ax.axhline(-band, linewidth=1, linestyle="--", alpha=0.55, color="gray")
+        ax.text(
+            0.02, 0.98,
+            f"σ(resid)={sigma:.3g}  |  ±2σ={band:.3g}",
+            transform=ax.transAxes,
+            ha="left", va="top",
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="none", alpha=0.75),
+        )
+
+    ax.set_title(f"Residuals vs Fitted: {y_col} (Full model)")
+    ax.set_xlabel("Fitted")
+    ax.set_ylabel("Residual")
+    ax.grid(True, alpha=0.25)
+
+    return fig
 
 
 # =========================
@@ -709,7 +784,6 @@ def main():
             index=1
         )
 
-        # 공통 UI
         label_fontsize = st.slider("라벨 크기", min_value=6, max_value=14, value=8, step=1)
         fig_w = st.slider("그림 너비", 6, 16, 10, 1)
         fig_h = st.slider("그림 높이", 5, 12, 8, 1)
@@ -717,14 +791,11 @@ def main():
         if mode in ["단일(단변량)", "이변량"]:
             geo_path = st.text_input("GEO_PATH (GeoJSON/SHP)", value=DEFAULT_GEO_PATH)
             csv_path = st.text_input("CSV_PATH", value=DEFAULT_CSV_PATH)
-
         elif mode == "노년부양비":
             burden_ts_path = st.text_input("노년부양비 CSV_PATH", value=DEFAULT_BURDEN_TS_PATH)
-
         else:  # 다중회귀
             csv_path = st.text_input("CSV_PATH (회귀용)", value=DEFAULT_CSV_PATH)
 
-        # 모드별 옵션
         if mode == "이변량":
             st.divider()
             n_bins = st.selectbox("분할 개수 (N_BINS)", options=[3, 4], index=0)
@@ -762,7 +833,6 @@ def main():
 
         with st.expander("데이터(미리보기)"):
             st.dataframe(df_ts, use_container_width=True)
-
         return
 
     # =========================
@@ -780,13 +850,13 @@ def main():
             numeric_cols.remove(CSV_KEY)
 
         candidate_cols = numeric_cols if len(numeric_cols) > 0 else [c for c in df_all.columns if c != CSV_KEY]
-        candidate_cols = candidate_cols[::-1]  # BurdenIndex ... 2015 순서로 뒤집기
+        candidate_cols = candidate_cols[::-1]
 
         if len(candidate_cols) < 2:
-            st.error("회귀에 사용할 숫자형 컬럼이 부족합니다.")
+            st.error("회귀에 사용할 컬럼이 부족합니다.")
             st.stop()
 
-        st.subheader("다중회귀 비교 (OLS + HC3) : 회귀1 vs 회귀2")
+        st.subheader("다중회귀 비교 (OLS + HC3) : 회귀1 vs 회귀2 (제출용)")
 
         gu_list = (
             sorted(df_all[CSV_KEY].astype(str).dropna().unique().tolist())
@@ -864,7 +934,7 @@ def main():
                 x_focus_default = x_cols[0]
 
             x_focus = safe_selectbox(
-                "Partial regression으로 볼 X",
+                "Adjusted plot으로 볼 X (x는 원값)",
                 options=x_cols,
                 key=f"{prefix}_x_focus",
                 default=x_focus_default,
@@ -873,15 +943,20 @@ def main():
                 return None
 
             with st.expander("구 강조(선택) - red/green", expanded=False):
-                highlight_red = st.multiselect("RED 강조", options=gu_list, default=[], key=f"{prefix}_hi_red")
-                highlight_green = st.multiselect("GREEN 강조", options=gu_list, default=[], key=f"{prefix}_hi_green")
+                highlight_red_raw = st.multiselect("RED 강조", options=gu_list, default=[], key=f"{prefix}_hi_red")
+                highlight_green_raw = st.multiselect("GREEN 강조", options=gu_list, default=[], key=f"{prefix}_hi_green")
+
+            # ✅ 비교 안정화를 위해 normalize
+            highlight_red = [normalize_gu(x) for x in highlight_red_raw]
+            highlight_green = [normalize_gu(x) for x in highlight_green_raw]
 
             try:
                 work = _clean_for_reg(df_all, y_col=y_col, x_cols=x_cols)
                 res = fit_ols_hc3(work, y_col=y_col, x_cols=x_cols)
                 coef_df = summarize_hc3(res, y_name=y_col)
 
-                fig, _meta = make_partial_reg_fig(
+                # (1) 제출용 Adjusted plot (x 원값)
+                fig_adj, _meta = make_adjusted_effect_fig(
                     work=work,
                     y_col=y_col,
                     x_focus=x_focus,
@@ -889,6 +964,17 @@ def main():
                     highlight_red=highlight_red,
                     highlight_green=highlight_green,
                     figsize=(fig_w, fig_h),
+                    label_fontsize=label_fontsize,
+                )
+
+                # (2) Residuals vs Fitted (+/-2σ 밴드)
+                fig_resid = make_residuals_vs_fitted_fig(
+                    work=work,
+                    res=res,
+                    y_col=y_col,
+                    highlight_red=highlight_red,
+                    highlight_green=highlight_green,
+                    figsize=(fig_w, max(4, int(fig_h * 0.7))),
                     label_fontsize=label_fontsize,
                 )
 
@@ -902,7 +988,13 @@ def main():
                 st.error(f"{prefix} 회귀/시각화 실패: {e}")
                 return None
 
-            return {"res": res, "coef_df": coef_df, "vif_df": vif_df, "fig": fig}
+            return {
+                "res": res,
+                "coef_df": coef_df,
+                "vif_df": vif_df,
+                "fig_adj": fig_adj,
+                "fig_resid": fig_resid,
+            }
 
         reg1_defaults = {
             "y": "Care",
@@ -927,10 +1019,15 @@ def main():
             if out1 is not None:
                 r = out1["res"]
                 st.caption(f"[REG1] N={int(r.nobs)}, R²={r.rsquared:.3f}, Adj.R²={r.rsquared_adj:.3f}")
-                st.pyplot(out1["fig"], clear_figure=True)
+
+                st.pyplot(out1["fig_adj"], clear_figure=True)
+
+                with st.expander("REG1 Residuals vs Fitted (±2σ 밴드)", expanded=False):
+                    st.pyplot(out1["fig_resid"], clear_figure=True)
 
                 with st.expander("REG1 회귀 결과(HC3)", expanded=False):
                     st.dataframe(out1["coef_df"], use_container_width=True)
+
                 with st.expander("REG1 VIF (선택된 X)", expanded=False):
                     st.dataframe(out1["vif_df"], use_container_width=True)
 
@@ -939,10 +1036,15 @@ def main():
             if out2 is not None:
                 r = out2["res"]
                 st.caption(f"[REG2] N={int(r.nobs)}, R²={r.rsquared:.3f}, Adj.R²={r.rsquared_adj:.3f}")
-                st.pyplot(out2["fig"], clear_figure=True)
+
+                st.pyplot(out2["fig_adj"], clear_figure=True)
+
+                with st.expander("REG2 Residuals vs Fitted (±2σ 밴드)", expanded=False):
+                    st.pyplot(out2["fig_resid"], clear_figure=True)
 
                 with st.expander("REG2 회귀 결과(HC3)", expanded=False):
                     st.dataframe(out2["coef_df"], use_container_width=True)
+
                 with st.expander("REG2 VIF (선택된 X)", expanded=False):
                     st.dataframe(out2["vif_df"], use_container_width=True)
 
